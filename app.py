@@ -91,7 +91,7 @@ STATE_LABELS = {
     "stalledDL":    "⏳ Stalled",
     "stalledUP":    "⏳ Seeding (stalled)",
     "pausedDL":     "⏸ Paused",
-    "pausedUP":     "⏸ Done",
+    "pausedUP":     "⏸ Stopped",
     "checkingDL":   "🔍 Checking",
     "checkingUP":   "🔍 Checking",
     "queuedDL":     "⏱ Queued",
@@ -100,6 +100,13 @@ STATE_LABELS = {
     "error":        "❌ Error",
     "missingFiles": "❌ Missing files",
     "unknown":      "❓ Unknown",
+}
+
+FILTER_GROUPS = {
+    "All":         None,
+    "Downloading": {"downloading", "stalledDL", "checkingDL", "queuedDL", "moving"},
+    "Seeding":     {"uploading", "stalledUP", "checkingUP", "queuedUP"},
+    "Stopped":     {"pausedDL", "pausedUP", "error", "missingFiles", "unknown"},
 }
 
 
@@ -211,8 +218,14 @@ def main():
         st.caption(save_path)
 
         st.divider()
+
+        # Seeding behaviour
+        st.subheader("Options")
+        stop_seeding = st.toggle("Stop seeding when complete", value=True)
+
+        st.divider()
         st.caption(f"Updated {time.strftime('%H:%M:%S')}")
-        st.button("⟳ Refresh", on_click=st.rerun, use_container_width=True)
+        st.button("⟳ Refresh", use_container_width=True)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
 
@@ -236,6 +249,7 @@ def main():
                     ok = qbit.add_torrent_file(
                         f.read(), filename=f.name,
                         save_path=save_path, category=category,
+                        stop_seeding=stop_seeding,
                     )
                     if ok:
                         st.success(f"Added: {f.name}")
@@ -258,7 +272,10 @@ def main():
                 else:
                     for link in links:
                         qbit.login()
-                        ok = qbit.add_magnet(link, save_path=save_path, category=category)
+                        ok = qbit.add_magnet(
+                            link, save_path=save_path, category=category,
+                            stop_seeding=stop_seeding,
+                        )
                         label = link[:72] + "…"
                         if ok:
                             st.success(f"Added: {label}")
@@ -268,53 +285,76 @@ def main():
 
     # Queue
     with tab_queue:
-        torrents = qbit.get_torrents()
+        all_torrents = qbit.get_torrents()
 
-        if not torrents:
+        if not all_torrents:
             st.info("Queue is empty — or qBittorrent is unreachable.")
         else:
             # Summary row
-            total_dl = sum(t.get("dlspeed", 0) for t in torrents)
-            total_ul = sum(t.get("upspeed", 0) for t in torrents)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Torrents", len(torrents))
-            c2.metric("Total ↓", fmt_speed(total_dl))
-            c3.metric("Total ↑", fmt_speed(total_ul))
+            total_dl = sum(t.get("dlspeed", 0) for t in all_torrents)
+            total_ul = sum(t.get("upspeed", 0) for t in all_torrents)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total", len(all_torrents))
+            c2.metric("Downloading", sum(1 for t in all_torrents if t.get("state") in FILTER_GROUPS["Downloading"]))
+            c3.metric("Total ↓", fmt_speed(total_dl))
+            c4.metric("Total ↑", fmt_speed(total_ul))
 
-            st.divider()
+            # Filter
+            status_filter = st.radio(
+                "Show",
+                list(FILTER_GROUPS.keys()),
+                horizontal=True,
+                label_visibility="collapsed",
+            )
 
-            for t in torrents:
-                h = t["hash"]
-                state = t.get("state", "unknown")
-                progress = t.get("progress", 0.0)
-                is_paused = "paused" in state.lower()
+            states = FILTER_GROUPS[status_filter]
+            torrents = [t for t in all_torrents if states is None or t.get("state") in states]
 
-                name_col, size_col, eta_col, state_col, act_col = st.columns(
-                    [5, 1, 1, 2, 2]
-                )
-                name_col.markdown(f"**{t['name']}**")
-                size_col.text(fmt_size(t.get("size", 0)))
-                eta_col.text(fmt_eta(t.get("eta", -1)))
-                state_col.text(STATE_LABELS.get(state, state))
-
-                with act_col:
-                    btn_pause, btn_del = st.columns(2)
-                    if is_paused:
-                        if btn_pause.button("▶", key=f"r_{h}", help="Resume"):
-                            qbit.resume_torrent(h)
-                            st.rerun()
-                    else:
-                        if btn_pause.button("⏸", key=f"p_{h}", help="Pause"):
-                            qbit.pause_torrent(h)
-                            st.rerun()
-                    if btn_del.button("🗑", key=f"d_{h}", help="Remove (keep files)"):
-                        qbit.delete_torrent(h, delete_files=False)
-                        st.rerun()
-
-                dl = fmt_speed(t.get("dlspeed", 0))
-                ul = fmt_speed(t.get("upspeed", 0))
-                st.progress(progress, text=f"{progress * 100:.1f}%  ↓{dl}  ↑{ul}")
+            if not torrents:
+                st.caption(f"No {status_filter.lower()} torrents.")
+            else:
                 st.divider()
+                for t in torrents:
+                    h = t["hash"]
+                    state = t.get("state", "unknown")
+                    progress = t.get("progress", 0.0)
+                    is_paused = "paused" in state.lower()
+                    is_stopped_seeding = state == "pausedUP"
+
+                    name_col, size_col, eta_col, state_col, act_col = st.columns(
+                        [5, 1, 1, 2, 3]
+                    )
+                    name_col.markdown(f"**{t['name']}**")
+                    size_col.text(fmt_size(t.get("size", 0)))
+                    eta_col.text(fmt_eta(t.get("eta", -1)))
+                    state_col.text(STATE_LABELS.get(state, state))
+
+                    with act_col:
+                        btns = st.columns(3)
+                        # Pause / Resume download
+                        if is_paused and not is_stopped_seeding:
+                            if btns[0].button("▶", key=f"r_{h}", help="Resume"):
+                                qbit.resume_torrent(h)
+                                st.rerun()
+                        elif not is_stopped_seeding:
+                            if btns[0].button("⏸", key=f"p_{h}", help="Pause"):
+                                qbit.pause_torrent(h)
+                                st.rerun()
+                        # Resume seeding (only for completed/stopped torrents)
+                        if is_stopped_seeding:
+                            if btns[1].button("▶ Seed", key=f"s_{h}", help="Resume seeding"):
+                                qbit.set_share_limits(h, ratio_limit=-1, seeding_time_limit=-1)
+                                qbit.resume_torrent(h)
+                                st.rerun()
+                        # Delete
+                        if btns[2].button("🗑", key=f"d_{h}", help="Remove (keep files)"):
+                            qbit.delete_torrent(h, delete_files=False)
+                            st.rerun()
+
+                    dl = fmt_speed(t.get("dlspeed", 0))
+                    ul = fmt_speed(t.get("upspeed", 0))
+                    st.progress(progress, text=f"{progress * 100:.1f}%  ↓{dl}  ↑{ul}")
+                    st.divider()
 
 
 if __name__ == "__main__":

@@ -40,12 +40,16 @@ class QBittorrentClient:
         filename: str = "file.torrent",
         save_path: Optional[str] = None,
         category: Optional[str] = None,
+        stop_seeding: bool = True,
     ) -> bool:
         data = {}
         if save_path:
             data["savepath"] = save_path
         if category:
             data["category"] = category
+        if stop_seeding:
+            data["ratioLimit"] = 0
+            data["seedingTimeLimit"] = 0
         try:
             r = self._post(
                 "/torrents/add",
@@ -61,15 +65,38 @@ class QBittorrentClient:
         magnet: str,
         save_path: Optional[str] = None,
         category: Optional[str] = None,
+        stop_seeding: bool = True,
     ) -> bool:
         data = {"urls": magnet}
         if save_path:
             data["savepath"] = save_path
         if category:
             data["category"] = category
+        if stop_seeding:
+            data["ratioLimit"] = 0
+            data["seedingTimeLimit"] = 0
         try:
             r = self._post("/torrents/add", data=data)
             return r.text.strip() in ("Ok.", "Ok")
+        except Exception:
+            return False
+
+    def set_share_limits(
+        self,
+        torrent_hash: str,
+        ratio_limit: float = -1,
+        seeding_time_limit: int = -1,
+    ) -> bool:
+        try:
+            r = self._post(
+                "/torrents/setShareLimits",
+                data={
+                    "hashes": torrent_hash,
+                    "ratioLimit": ratio_limit,
+                    "seedingTimeLimit": seeding_time_limit,
+                },
+            )
+            return r.status_code == 200
         except Exception:
             return False
 
