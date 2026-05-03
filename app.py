@@ -61,7 +61,34 @@ def get_vpn(host, port, user, key_path) -> VPNManager:
     return VPNManager(host, port, user, key_path)
 
 
-# ── Formatters ────────────────────────────────────────────────────────────────
+# ── Formatters & helpers ──────────────────────────────────────────────────────
+
+def circle_progress(pct: float, state: str) -> str:
+    size, r = 36, 13
+    cx = cy = size / 2
+    circ = 2 * 3.14159265 * r
+    dash = pct * circ
+    if state in ("downloading", "stalledDL", "checkingDL", "queuedDL", "moving"):
+        color = "#3b82f6"
+    elif state in ("uploading", "stalledUP", "checkingUP", "queuedUP"):
+        color = "#22c55e"
+    elif state == "pausedUP":
+        color = "#10b981"
+    elif state in ("error", "missingFiles"):
+        color = "#ef4444"
+    else:
+        color = "#6b7280"
+    label = f"{int(pct * 100)}%"
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#374151" stroke-width="3"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{color}" stroke-width="3"'
+        f' stroke-dasharray="{dash:.2f} {circ:.2f}" transform="rotate(-90 {cx} {cy})"/>'
+        f'<text x="{cx}" y="{cy + 3.5}" text-anchor="middle" font-size="7.5"'
+        f' fill="{color}" font-family="monospace" font-weight="bold">{label}</text>'
+        f'</svg>'
+    )
+
 
 def fmt_size(b: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -120,6 +147,110 @@ def emby_refresh(cfg: dict):
         requests.post(url, headers={"X-Emby-Token": api_key}, timeout=5)
     except Exception:
         pass
+
+
+# ── Transfer fragment (auto-refreshes every 5 seconds) ───────────────────────
+
+@st.fragment(run_every=5)
+def render_transfer(qbit: QBittorrentClient, vpn: VPNManager):
+    st.subheader("Transfer")
+    info = qbit.get_transfer_info()
+    if info:
+        c1, c2 = st.columns(2)
+        c1.metric("↓", fmt_speed(info.get("dl_info_speed", 0)))
+        c2.metric("↑", fmt_speed(info.get("up_info_speed", 0)))
+    else:
+        st.caption("qBittorrent unreachable")
+        if st.button("Restart qBittorrent", use_container_width=True):
+            with st.spinner("Restarting…"):
+                ok, msg = vpn.restart_qbittorrent()
+            st.toast(msg)
+            time.sleep(3)
+            st.rerun()
+
+
+# ── Queue fragment (auto-refreshes every 5 seconds) ──────────────────────────
+
+@st.fragment(run_every=5)
+def render_queue(qbit: QBittorrentClient):
+    all_torrents = qbit.get_torrents()
+
+    if not all_torrents:
+        st.info("Queue is empty — or qBittorrent is unreachable.")
+        return
+
+    # Summary row
+    total_dl = sum(t.get("dlspeed", 0) for t in all_torrents)
+    total_ul = sum(t.get("upspeed", 0) for t in all_torrents)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total", len(all_torrents))
+    c2.metric("Downloading", sum(1 for t in all_torrents if t.get("state") in FILTER_GROUPS["Downloading"]))
+    c3.metric("Total ↓", fmt_speed(total_dl))
+    c4.metric("Total ↑", fmt_speed(total_ul))
+
+    # Filter
+    status_filter = st.radio(
+        "Show",
+        list(FILTER_GROUPS.keys()),
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    states = FILTER_GROUPS[status_filter]
+    torrents = [t for t in all_torrents if states is None or t.get("state") in states]
+
+    if not torrents:
+        st.caption(f"No {status_filter.lower()} torrents.")
+        return
+
+    st.divider()
+    for t in torrents:
+        h = t["hash"]
+        state = t.get("state", "unknown")
+        progress = t.get("progress", 0.0)
+        is_paused = "paused" in state.lower()
+        is_stopped_seeding = state == "pausedUP"
+        dl = fmt_speed(t.get("dlspeed", 0))
+        ul = fmt_speed(t.get("upspeed", 0))
+
+        col_prog, col_name, col_meta, col_act = st.columns([1, 6, 3, 3])
+
+        col_prog.markdown(circle_progress(progress, state), unsafe_allow_html=True)
+
+        col_name.markdown(
+            f"**{t['name']}**  \n"
+            f"<small style='color:gray'>{fmt_size(t.get('size', 0))} &nbsp;·&nbsp; "
+            f"{STATE_LABELS.get(state, state)}</small>",
+            unsafe_allow_html=True,
+        )
+
+        col_meta.markdown(
+            f"<small style='color:gray'>ETA&nbsp;</small>**{fmt_eta(t.get('eta', -1))}**&nbsp;&nbsp;"
+            f"<small style='color:gray'>↓</small>{dl}&nbsp;"
+            f"<small style='color:gray'>↑</small>{ul}",
+            unsafe_allow_html=True,
+        )
+
+        with col_act:
+            btns = st.columns(3)
+            if is_paused and not is_stopped_seeding:
+                if btns[0].button("▶", key=f"r_{h}", help="Resume"):
+                    qbit.resume_torrent(h)
+                    st.rerun()
+            elif not is_stopped_seeding:
+                if btns[0].button("⏸", key=f"p_{h}", help="Pause"):
+                    qbit.pause_torrent(h)
+                    st.rerun()
+            if is_stopped_seeding:
+                if btns[1].button("▶ Seed", key=f"s_{h}", help="Resume seeding"):
+                    qbit.set_share_limits(h, ratio_limit=-1, seeding_time_limit=-1)
+                    qbit.resume_torrent(h)
+                    st.rerun()
+            if btns[2].button("🗑", key=f"d_{h}", help="Remove (keep files)"):
+                qbit.delete_torrent(h, delete_files=False)
+                st.rerun()
+
+    st.caption(f"Updated {time.strftime('%H:%M:%S')}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -192,21 +323,8 @@ def main():
 
         st.divider()
 
-        # Transfer speeds
-        st.subheader("Transfer")
-        info = qbit.get_transfer_info()
-        if info:
-            c1, c2 = st.columns(2)
-            c1.metric("↓", fmt_speed(info.get("dl_info_speed", 0)))
-            c2.metric("↑", fmt_speed(info.get("up_info_speed", 0)))
-        else:
-            st.caption("qBittorrent unreachable")
-            if st.button("Restart qBittorrent", use_container_width=True):
-                with st.spinner("Restarting…"):
-                    ok, msg = vpn.restart_qbittorrent()
-                st.toast(msg)
-                time.sleep(3)
-                st.rerun()
+        # Transfer speeds (auto-refreshing fragment)
+        render_transfer(qbit, vpn)
 
         st.divider()
 
@@ -285,76 +403,7 @@ def main():
 
     # Queue
     with tab_queue:
-        all_torrents = qbit.get_torrents()
-
-        if not all_torrents:
-            st.info("Queue is empty — or qBittorrent is unreachable.")
-        else:
-            # Summary row
-            total_dl = sum(t.get("dlspeed", 0) for t in all_torrents)
-            total_ul = sum(t.get("upspeed", 0) for t in all_torrents)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total", len(all_torrents))
-            c2.metric("Downloading", sum(1 for t in all_torrents if t.get("state") in FILTER_GROUPS["Downloading"]))
-            c3.metric("Total ↓", fmt_speed(total_dl))
-            c4.metric("Total ↑", fmt_speed(total_ul))
-
-            # Filter
-            status_filter = st.radio(
-                "Show",
-                list(FILTER_GROUPS.keys()),
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-
-            states = FILTER_GROUPS[status_filter]
-            torrents = [t for t in all_torrents if states is None or t.get("state") in states]
-
-            if not torrents:
-                st.caption(f"No {status_filter.lower()} torrents.")
-            else:
-                st.divider()
-                for t in torrents:
-                    h = t["hash"]
-                    state = t.get("state", "unknown")
-                    progress = t.get("progress", 0.0)
-                    is_paused = "paused" in state.lower()
-                    is_stopped_seeding = state == "pausedUP"
-
-                    name_col, size_col, eta_col, state_col, act_col = st.columns(
-                        [5, 1, 1, 2, 3]
-                    )
-                    name_col.markdown(f"**{t['name']}**")
-                    size_col.text(fmt_size(t.get("size", 0)))
-                    eta_col.text(fmt_eta(t.get("eta", -1)))
-                    state_col.text(STATE_LABELS.get(state, state))
-
-                    with act_col:
-                        btns = st.columns(3)
-                        # Pause / Resume download
-                        if is_paused and not is_stopped_seeding:
-                            if btns[0].button("▶", key=f"r_{h}", help="Resume"):
-                                qbit.resume_torrent(h)
-                                st.rerun()
-                        elif not is_stopped_seeding:
-                            if btns[0].button("⏸", key=f"p_{h}", help="Pause"):
-                                qbit.pause_torrent(h)
-                                st.rerun()
-                        # Resume seeding (only for completed/stopped torrents)
-                        if is_stopped_seeding:
-                            if btns[1].button("▶ Seed", key=f"s_{h}", help="Resume seeding"):
-                                qbit.set_share_limits(h, ratio_limit=-1, seeding_time_limit=-1)
-                                qbit.resume_torrent(h)
-                                st.rerun()
-                        # Delete
-                        if btns[2].button("🗑", key=f"d_{h}", help="Remove (keep files)"):
-                            qbit.delete_torrent(h, delete_files=False)
-                            st.rerun()
-
-                    dl = fmt_speed(t.get("dlspeed", 0))
-                    ul = fmt_speed(t.get("upspeed", 0))
-                    st.progress(progress, text=f"{progress * 100:.1f}%  ↓{dl}  ↑{ul}")
-                    st.divider()
+        render_queue(qbit)
 
 
 if __name__ == "__main__":
