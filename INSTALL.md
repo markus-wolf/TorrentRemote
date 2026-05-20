@@ -79,7 +79,7 @@ first login.
 | `Session\Interface=nordlynx` | qBittorrent sends/receives only on the NordLynx interface. If NordVPN drops, `nordlynx` disappears and torrent traffic silently stops — no leak. |
 | `WebUI\Address=127.0.0.1` | Web UI listens on localhost only, never reachable from the LAN directly. The Mac reaches it via SSH tunnel. |
 | `WebUI\Password_PBKDF2` | Must be present — newer qBittorrent rejects all connections if no password hash is set. |
-| `WebUI\LocalHostAuth=false` | Skips auth for API clients (curl, Streamlit). Browser access through the SSH tunnel still prompts due to a Host header port mismatch — use the API only. |
+| `WebUI\LocalHostAuth=false` | Skips auth for API clients (curl, Streamlit). |
 
 ---
 
@@ -248,12 +248,101 @@ sudo cat /home/qbittorrent/.ssh/authorized_keys
 Test the connection from your **Mac**:
 
 ```bash
-ssh qbittorrent@<server-ip> 'echo ok'
+ssh -p 22 qbittorrent@<server-lan-ip> 'echo ok'
 ```
 
 ---
 
-## 9. First run
+## 9. Harden SSH (required before external access)
+
+Disable password authentication so only key-holders can log in:
+
+```bash
+sudo nano /etc/ssh/sshd_config
+```
+
+Set (or confirm) these lines:
+
+```
+PasswordAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin no
+```
+
+Validate and reload:
+
+```bash
+sudo sshd -t          # check for syntax errors — must return no output
+sudo systemctl reload ssh
+```
+
+> **Do this before opening any port to the internet.** With password auth disabled,
+> brute-force attacks against SSH are ineffective regardless of which port is used.
+
+---
+
+## 10. External access (away from home)
+
+To reach the server from outside your home network you need two things:
+
+### Router port forward
+
+In your router admin panel, add a port forwarding rule:
+
+| Field | Value |
+|---|---|
+| External port | A port in the 49000–65000 range (e.g. `49256`) |
+| Internal IP | Your Ubuntu server's LAN IP |
+| Internal port | `22` |
+| Protocol | TCP |
+
+Avoid port 22 and common alternates (222, 2222, 8022) externally — bots scan these
+constantly. A high non-standard port dramatically reduces log noise. The real security
+is the SSH key, but there is no reason to invite automated scanners.
+
+### DDNS
+
+If your ISP assigns a dynamic public IP, set up DDNS so you always have a stable
+hostname to connect to. Most home routers have a built-in DDNS client that updates
+automatically when the IP changes — configure it in the router admin panel and note
+the hostname it gives you (e.g. `yourname.freedynamicdns.org`).
+
+### Mac config
+
+Create `config.external.yaml` from the template:
+
+```bash
+cp config.external.example.yaml config.external.yaml
+```
+
+Edit the `ssh` section:
+
+```yaml
+ssh:
+  host: "yourname.freedynamicdns.org"   # DDNS hostname
+  port: 49256                            # external port from the router rule
+  user: "qbittorrent"
+  key_path: "~/.ssh/id_rsa"
+```
+
+Then run the app with the external config:
+
+```bash
+streamlit run app.py -- --config config.external.yaml
+```
+
+### Test from outside
+
+The easiest test before leaving home is to use your phone's mobile data (not Wi-Fi)
+and try:
+
+```bash
+ssh -p 49256 qbittorrent@yourname.freedynamicdns.org 'echo ok'
+```
+
+---
+
+## 11. First run
 
 Start qBittorrent (NordVPN must already be connected):
 
@@ -283,7 +372,7 @@ curl http://localhost:8080/api/v2/auth/login \
 
 ---
 
-## 10. Verify VPN binding
+## 12. Verify VPN binding
 
 Add a torrent via the Streamlit app, then on the server:
 
@@ -307,12 +396,11 @@ sudo tcpdump -i enp2s0 -n 'not port 22' --line-buffered | head -20
 
 ---
 
-## 11. VPN server rotation
+## 13. VPN server rotation
 
 The Streamlit sidebar has a **Rotate Server** button that switches to a different NordVPN
 P2P server in the same country (or a country you specify) without interrupting the SSH
-session. The rotation script runs in the background on the server; the UI auto-updates
-within ~20 seconds.
+session. The rotation script runs on the server; the UI auto-updates within ~20 seconds.
 
 ### Install the rotation script
 
@@ -330,11 +418,7 @@ sudo /opt/torrentremote/rotate-vpn.sh
 sudo /opt/torrentremote/rotate-vpn.sh Netherlands
 ```
 
-Progress is logged to `/tmp/rotate-vpn.log`.
-
 ### Automatic rotation timer (every 6 hours)
-
-Create a systemd timer so the server rotates servers automatically:
 
 ```bash
 sudo tee /etc/systemd/system/nordvpn-rotate.service > /dev/null << 'EOF'
@@ -380,45 +464,3 @@ On reboot the correct order is automatic if autoconnect is enabled:
 2. NordVPN daemon reconnects (`autoconnect on` handles this)
 3. `nordlynx` interface appears
 4. systemd starts `qbittorrent-nox` (the `ExecStartPre` wait loop handles timing)
-
----
-
-## Mac setup
-
-Edit `config.yaml` with your server hostname/IP and credentials:
-
-```yaml
-qbittorrent:
-  host: "192.168.1.x"          # server hostname or IP (only used without SSH tunnel)
-  port: 8080                    # qBittorrent Web UI port on the server
-  username: "admin"
-  password: "adminadmin"        # change after first login
-  use_ssh_tunnel: true
-  ssh_tunnel_local_port: 18080  # local port the tunnel binds on your Mac
-
-ssh:
-  host: "192.168.1.x"          # server hostname or IP
-  port: 22
-  user: "qbittorrent"
-  key_path: "~/.ssh/id_rsa"
-
-emby:
-  host: "192.168.1.x"
-  port: 8096
-  api_key: ""                   # Emby Dashboard → Advanced → API Keys (blank = disabled)
-
-downloads:
-  movies: "/downloads/movies"
-  tv:     "/downloads/tv"
-  other:  "/downloads/other"
-```
-
-Then run the app:
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-The app opens at `http://localhost:8501`. The SSH tunnel is created automatically on
-startup and rebuilt automatically after Mac sleep — no manual `ssh` command needed.
