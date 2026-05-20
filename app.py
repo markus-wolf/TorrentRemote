@@ -23,8 +23,7 @@ def load_config() -> dict:
 
 # ── Singletons (survive Streamlit reruns) ─────────────────────────────────────
 
-@st.cache_resource
-def get_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port):
+def _open_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port):
     key = str(Path(ssh_key_path).expanduser())
     cmd = [
         "ssh", "-N",
@@ -38,8 +37,6 @@ def get_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_po
         f"{ssh_user}@{ssh_host}",
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # Wait up to 5s for the local port to open
     for _ in range(10):
         time.sleep(0.5)
         with socket.socket() as s:
@@ -47,6 +44,31 @@ def get_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_po
                 return proc
     proc.kill()
     raise RuntimeError(f"SSH tunnel did not open on port {local_port}")
+
+
+@st.cache_resource
+def get_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port):
+    return _open_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port)
+
+
+def ensure_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port):
+    """Check tunnel is alive; silently rebuild it if not (e.g. after Mac sleep)."""
+    with socket.socket() as s:
+        if s.connect_ex(("127.0.0.1", local_port)) == 0:
+            return  # alive
+
+    # Port unreachable — kill stale process and recreate
+    try:
+        old = get_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port)
+        if old and old.poll() is None:
+            old.kill()
+    except Exception:
+        pass
+
+    get_tunnel.clear()
+    get_qbit.clear()
+
+    get_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port)
 
 
 @st.cache_resource
@@ -147,6 +169,61 @@ def emby_refresh(cfg: dict):
         requests.post(url, headers={"X-Emby-Token": api_key}, timeout=5)
     except Exception:
         pass
+
+
+# ── VPN status fragment (auto-refreshes every 10 seconds) ────────────────────
+
+@st.fragment(run_every=10)
+def render_vpn(vpn: VPNManager):
+    st.subheader("VPN")
+    try:
+        vs = vpn.status()
+    except Exception as e:
+        vs = {"connected": False, "error": str(e)}
+
+    if vs.get("connected"):
+        st.success("Connected")
+        if vs.get("hostname"):
+            st.caption(vs["hostname"])
+        loc = " · ".join(filter(None, [vs.get("city"), vs.get("country")]))
+        if loc:
+            st.caption(loc)
+        if vs.get("ip"):
+            st.caption(f"IP: {vs['ip']}")
+        if vs.get("transfer"):
+            st.caption(vs["transfer"])
+        rotate_country = st.text_input(
+            "Rotate to country",
+            value=vs.get("country", ""),
+            placeholder="e.g. Netherlands (blank = current)",
+            label_visibility="collapsed",
+        )
+        if st.button("🔄 Rotate Server", use_container_width=True,
+                     help="Pick a different server in the same (or specified) country"):
+            ok, msg = vpn.rotate(country=rotate_country)
+            if ok:
+                st.toast(msg)
+            else:
+                st.error(msg)
+            # fragment will auto-refresh every 10s; force one immediate cycle
+            st.rerun(scope="fragment")
+        if st.button("Disconnect VPN", use_container_width=True):
+            with st.spinner("Disconnecting…"):
+                ok, msg = vpn.disconnect()
+            st.toast(msg)
+            st.rerun(scope="fragment")
+    else:
+        st.error("Disconnected")
+        if vs.get("error"):
+            st.caption(vs["error"])
+        if st.button("Connect VPN (P2P)", type="primary", use_container_width=True):
+            with st.spinner("Connecting…"):
+                ok, msg = vpn.connect("P2P")
+            if ok:
+                st.toast(msg)
+            else:
+                st.error(msg)
+            st.rerun(scope="fragment")
 
 
 # ── Transfer fragment (auto-refreshes every 5 seconds) ───────────────────────
@@ -267,7 +344,7 @@ def main():
     if qbit_cfg.get("use_ssh_tunnel"):
         local_port = qbit_cfg.get("ssh_tunnel_local_port", 18080)
         try:
-            get_tunnel(
+            ensure_tunnel(
                 ssh_cfg["host"], ssh_cfg["port"],
                 ssh_cfg["user"], ssh_cfg["key_path"],
                 local_port, qbit_cfg["port"],
@@ -287,39 +364,8 @@ def main():
     with st.sidebar:
         st.title("🧲 TorrentRemote")
 
-        # VPN
-        st.subheader("VPN")
-        try:
-            vs = vpn.status()
-        except Exception as e:
-            vs = {"connected": False, "error": str(e)}
-
-        if vs.get("connected"):
-            st.success("Connected")
-            loc = " · ".join(filter(None, [vs.get("city"), vs.get("country")]))
-            if loc:
-                st.caption(loc)
-            if vs.get("ip"):
-                st.caption(f"IP: {vs['ip']}")
-            if vs.get("transfer"):
-                st.caption(vs["transfer"])
-            if st.button("Disconnect VPN", use_container_width=True):
-                with st.spinner("Disconnecting…"):
-                    ok, msg = vpn.disconnect()
-                st.toast(msg)
-                st.rerun()
-        else:
-            st.error("Disconnected")
-            if vs.get("error"):
-                st.caption(vs["error"])
-            if st.button("Connect VPN (P2P)", type="primary", use_container_width=True):
-                with st.spinner("Connecting…"):
-                    ok, msg = vpn.connect("P2P")
-                if ok:
-                    st.toast(msg)
-                else:
-                    st.error(msg)
-                st.rerun()
+        # VPN status (auto-refreshing fragment)
+        render_vpn(vpn)
 
         st.divider()
 

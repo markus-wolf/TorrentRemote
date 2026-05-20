@@ -23,10 +23,10 @@ class VPNManager:
         )
         return client
 
-    def _run(self, command: str) -> Tuple[str, str, int]:
+    def _run(self, command: str, timeout: int = 20) -> Tuple[str, str, int]:
         client = self._connect()
         try:
-            _, stdout, stderr = client.exec_command(command, timeout=20)
+            _, stdout, stderr = client.exec_command(command, timeout=timeout)
             out = stdout.read().decode().strip()
             err = stderr.read().decode().strip()
             code = stdout.channel.recv_exit_status()
@@ -70,6 +70,25 @@ class VPNManager:
         try:
             out, err, code = self._run("nordvpn disconnect")
             return code == 0, (out or err)
+        except Exception as e:
+            return False, str(e)
+
+    def rotate(self, country: str = "") -> Tuple[bool, str]:
+        """Fire-and-forget: starts rotation in background, returns immediately.
+        Progress is logged to /tmp/rotate-vpn.log on the server."""
+        script = "/opt/torrentremote/rotate-vpn.sh"
+        if country:
+            script += f" '{country}'"
+        # nohup + </dev/null ensures the process survives when the SSH channel closes.
+        cmd = f"nohup sudo {script} > /tmp/rotate-vpn.log 2>&1 </dev/null &"
+        try:
+            client = self._connect()
+            try:
+                _, stdout, _ = client.exec_command(cmd, timeout=10)
+                stdout.channel.recv_exit_status()   # wait for shell to fork & exit
+            finally:
+                client.close()
+            return True, "Rotation started — VPN will reconnect in ~15 seconds"
         except Exception as e:
             return False, str(e)
 

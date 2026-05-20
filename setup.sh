@@ -56,6 +56,7 @@ SUDOERS_FILE="/etc/sudoers.d/torrentremote"
 cat > "$SUDOERS_FILE" << EOF
 $TORRENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart qbittorrent-nox
 $TORRENT_USER ALL=(ALL) NOPASSWD: /bin/systemctl status qbittorrent-nox
+$TORRENT_USER ALL=(ALL) NOPASSWD: /opt/torrentremote/rotate-vpn.sh
 EOF
 chmod 440 "$SUDOERS_FILE"
 
@@ -91,7 +92,36 @@ SCRIPTS_DIR="/opt/torrentremote"
 mkdir -p "$SCRIPTS_DIR"
 cp scripts/netns-up.sh   "$SCRIPTS_DIR/netns-up.sh"
 cp scripts/netns-down.sh "$SCRIPTS_DIR/netns-down.sh"
-chmod +x "$SCRIPTS_DIR"/netns-*.sh
+cp scripts/rotate-vpn.sh "$SCRIPTS_DIR/rotate-vpn.sh"
+chmod +x "$SCRIPTS_DIR"/netns-*.sh "$SCRIPTS_DIR/rotate-vpn.sh"
+
+# ── VPN rotation timer (every 6 hours) ───────────────────────────────────────
+cat > /etc/systemd/system/nordvpn-rotate.service << EOF
+[Unit]
+Description=Rotate NordVPN to a fresh P2P server
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$SCRIPTS_DIR/rotate-vpn.sh P2P
+EOF
+
+cat > /etc/systemd/system/nordvpn-rotate.timer << EOF
+[Unit]
+Description=Rotate NordVPN server every 6 hours
+
+[Timer]
+OnBootSec=6h
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable nordvpn-rotate.timer
+echo "VPN rotation timer enabled (every 6 hours)"
 
 # Systemd service: creates the torrent namespace + WireGuard VPN
 cat > /etc/systemd/system/torrent-netns.service << EOF

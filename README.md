@@ -88,10 +88,13 @@ is established automatically on startup — no manual `ssh` command needed.
 
 | Element | Description |
 |---|---|
-| VPN status | Shows NordVPN connection state, server location and IP. Connect/Disconnect buttons control NordVPN on the server via SSH. |
-| Transfer | Live global download/upload speed from qBittorrent. If unreachable, shows a Restart button. |
+| VPN status | Shows NordVPN connection state, server hostname (e.g. `de1036.nordvpn.com`), city/country, and IP. Auto-refreshes every 10 seconds. |
+| Connect / Disconnect | Controls NordVPN on the server via SSH. |
+| Rotate Server | Switches to a different P2P server in the same country (or one you type). Runs in the background; the status panel updates automatically when reconnected. |
+| Transfer | Live global download/upload speed. Auto-refreshes every 5 seconds. Shows a Restart button if qBittorrent is unreachable. |
 | Save to | Pick a category (movies / tv / other) — sets the download path on the server. |
-| Refresh | Manually refresh all data. |
+| Stop seeding when complete | Toggle — when on, new torrents stop automatically once downloaded (ratio 0). Per-torrent resume is available in the Queue tab. |
+| Refresh | Manually force a full page refresh. |
 
 ### Add Torrent tab
 
@@ -103,22 +106,30 @@ After a successful add, Emby is notified to scan the library immediately (if
 
 ### Queue tab
 
-Shows all torrents with name, size, ETA, state, and a progress bar with per-torrent
-speeds. Each row has pause/resume and delete (keeps files) buttons.
+Auto-refreshes every 5 seconds. Shows all torrents with a circular progress indicator,
+name, size, ETA, and per-torrent speeds. Filter by status: All / Downloading / Seeding /
+Stopped. Each row has:
+
+| Button | Action |
+|---|---|
+| ▶ / ⏸ | Resume or pause the torrent |
+| ▶ Seed | Resume seeding for a torrent that was auto-stopped on completion |
+| 🗑 | Remove from queue (keeps files on disk) |
 
 ---
 
 ## How the SSH tunnel works
 
 qBittorrent listens on `127.0.0.1:8080` on the server — not exposed on the LAN.
-On startup the app runs:
+On every page render the app checks whether the tunnel port is reachable. If it isn't
+(e.g. after Mac sleep), it kills the stale process and opens a fresh tunnel:
 
 ```
 ssh -N -L 127.0.0.1:<local_port>:127.0.0.1:8080 qbittorrent@<server>
 ```
 
 This forwards `localhost:<local_port>` on your Mac to qBittorrent on the server.
-The tunnel process lives for the duration of the Streamlit session.
+No manual `ssh` command or app restart is needed after the Mac wakes from sleep.
 
 ---
 
@@ -131,7 +142,27 @@ and offer a reconnect button.
 
 ---
 
+## VPN server rotation
+
+The **Rotate Server** button in the sidebar triggers `/opt/torrentremote/rotate-vpn.sh`
+on the server. The script:
+
+1. Records the current server hostname
+2. Disconnects NordVPN
+3. Reconnects to a P2P server in the same (or specified) country
+4. If the same server is picked, disconnects and reconnects again to force a different one
+5. Waits for the `nordlynx` interface to come back up
+
+The script runs entirely in the background — the Streamlit UI returns immediately with a
+toast, then auto-updates the VPN status panel when the new connection is established
+(~15 seconds).
+
+A systemd timer also rotates the server automatically every 6 hours.
+Progress is always logged to `/tmp/rotate-vpn.log` on the server.
+
+---
+
 ## Server setup
 
 See [INSTALL.md](INSTALL.md) for the full Ubuntu server setup: qBittorrent-nox,
-NordVPN, systemd services, SSH access, and VPN verification.
+NordVPN, systemd services, SSH access, VPN rotation, and traffic verification.

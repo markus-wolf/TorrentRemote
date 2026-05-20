@@ -85,13 +85,14 @@ first login.
 
 ## 5. Allow the qbittorrent user to restart its own service
 
-The Streamlit app can restart qBittorrent via SSH if it becomes unreachable.
-This sudoers entry allows that without a password prompt:
+The Streamlit app restarts qBittorrent and runs the VPN rotation script via SSH.
+These sudoers entries allow both without a password prompt:
 
 ```bash
 sudo tee /etc/sudoers.d/torrentremote > /dev/null << 'EOF'
 qbittorrent ALL=(ALL) NOPASSWD: /bin/systemctl restart qbittorrent-nox
 qbittorrent ALL=(ALL) NOPASSWD: /bin/systemctl status qbittorrent-nox
+qbittorrent ALL=(ALL) NOPASSWD: /opt/torrentremote/rotate-vpn.sh
 EOF
 
 sudo chmod 440 /etc/sudoers.d/torrentremote
@@ -306,6 +307,71 @@ sudo tcpdump -i enp2s0 -n 'not port 22' --line-buffered | head -20
 
 ---
 
+## 11. VPN server rotation
+
+The Streamlit sidebar has a **Rotate Server** button that switches to a different NordVPN
+P2P server in the same country (or a country you specify) without interrupting the SSH
+session. The rotation script runs in the background on the server; the UI auto-updates
+within ~20 seconds.
+
+### Install the rotation script
+
+```bash
+sudo mkdir -p /opt/torrentremote
+sudo cp scripts/rotate-vpn.sh /opt/torrentremote/rotate-vpn.sh
+sudo chmod +x /opt/torrentremote/rotate-vpn.sh
+```
+
+Test it manually first:
+
+```bash
+sudo /opt/torrentremote/rotate-vpn.sh
+# or to rotate to a specific country:
+sudo /opt/torrentremote/rotate-vpn.sh Netherlands
+```
+
+Progress is logged to `/tmp/rotate-vpn.log`.
+
+### Automatic rotation timer (every 6 hours)
+
+Create a systemd timer so the server rotates servers automatically:
+
+```bash
+sudo tee /etc/systemd/system/nordvpn-rotate.service > /dev/null << 'EOF'
+[Unit]
+Description=Rotate NordVPN to a fresh P2P server
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/torrentremote/rotate-vpn.sh
+EOF
+
+sudo tee /etc/systemd/system/nordvpn-rotate.timer > /dev/null << 'EOF'
+[Unit]
+Description=Rotate NordVPN server every 6 hours
+
+[Timer]
+OnBootSec=6h
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now nordvpn-rotate.timer
+```
+
+Verify the timer is scheduled:
+
+```bash
+systemctl list-timers nordvpn-rotate.timer
+```
+
+---
+
 ## Boot sequence
 
 On reboot the correct order is automatic if autoconnect is enabled:
@@ -319,22 +385,32 @@ On reboot the correct order is automatic if autoconnect is enabled:
 
 ## Mac setup
 
-Edit `config.yaml` with your server IP and credentials:
+Edit `config.yaml` with your server hostname/IP and credentials:
 
 ```yaml
 qbittorrent:
-  host: "192.168.1.x"
-  port: 8080
+  host: "192.168.1.x"          # server hostname or IP (only used without SSH tunnel)
+  port: 8080                    # qBittorrent Web UI port on the server
   username: "admin"
-  password: "adminadmin"
+  password: "adminadmin"        # change after first login
   use_ssh_tunnel: true
-  ssh_tunnel_local_port: 8080   # must match qBittorrent's port
+  ssh_tunnel_local_port: 18080  # local port the tunnel binds on your Mac
 
 ssh:
-  host: "192.168.1.x"
+  host: "192.168.1.x"          # server hostname or IP
   port: 22
   user: "qbittorrent"
   key_path: "~/.ssh/id_rsa"
+
+emby:
+  host: "192.168.1.x"
+  port: 8096
+  api_key: ""                   # Emby Dashboard → Advanced → API Keys (blank = disabled)
+
+downloads:
+  movies: "/downloads/movies"
+  tv:     "/downloads/tv"
+  other:  "/downloads/other"
 ```
 
 Then run the app:
@@ -344,5 +420,5 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app opens an SSH tunnel from `localhost:8080` to the server's `127.0.0.1:8080`
-automatically on startup.
+The app opens at `http://localhost:8501`. The SSH tunnel is created automatically on
+startup and rebuilt automatically after Mac sleep — no manual `ssh` command needed.
