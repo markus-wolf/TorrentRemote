@@ -1,5 +1,7 @@
+import argparse
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -15,9 +17,17 @@ st.set_page_config(page_title="TorrentRemote", page_icon="🧲", layout="wide")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+def _config_path() -> str:
+    """Return the config file path from --config argv, defaulting to config.yaml."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config", default="config.yaml")
+    args, _ = parser.parse_known_args(sys.argv[1:])
+    return args.config
+
+
 @st.cache_data(ttl=0)
-def load_config() -> dict:
-    with open("config.yaml") as f:
+def load_config(path: str) -> dict:
+    with open(path) as f:
         return yaml.safe_load(f)
 
 
@@ -333,7 +343,7 @@ def render_queue(qbit: QBittorrentClient):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    cfg = load_config()
+    cfg = load_config(_config_path())
     qbit_cfg = cfg["qbittorrent"]
     ssh_cfg = cfg["ssh"]
 

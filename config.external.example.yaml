@@ -1,0 +1,23 @@
+qbittorrent:
+  host: "127.0.0.1"            # always via SSH tunnel when external
+  port: 18080
+  username: "admin"
+  password: "change-me"
+  use_ssh_tunnel: true
+  ssh_tunnel_local_port: 18080
+
+ssh:
+  host: "your-ddns-hostname"   # e.g. yourname.freedynamicdns.org
+  port: 49256                  # external port forwarded to Ubuntu :22
+  user: "qbittorrent"
+  key_path: "~/.ssh/id_rsa"
+
+emby:
+  host: "your-server-hostname-or-ip"
+  port: 8096
+  api_key: ""                  # Emby Dashboard → Advanced → API Keys (leave blank to disable)
+
+downloads:
+  movies: "/downloads/movies"
+  tv:     "/downloads/tv"
+  other:  "/downloads/other"

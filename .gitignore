@@ -17,6 +17,7 @@ env/
 
 # Secrets / local config — never commit real credentials
 config.yaml
+config.external.yaml
 
 # Python version managers
 .python-version
