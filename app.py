@@ -31,6 +31,31 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+CONFIG_PROFILES = {
+    "config.yaml":          ("🏠", "Home"),
+    "config.external.yaml": ("🌐", "External"),
+}
+
+
+def _validate_config(path: str) -> tuple[bool, str]:
+    """Try to parse path as YAML and check required top-level keys."""
+    try:
+        with open(path) as f:
+            cfg = yaml.safe_load(f)
+        if not isinstance(cfg, dict):
+            return False, "not a valid YAML mapping"
+        for key in ("ssh", "qbittorrent"):
+            if key not in cfg:
+                return False, f"missing required key: '{key}'"
+        return True, ""
+    except FileNotFoundError:
+        return False, "file not found"
+    except yaml.YAMLError as e:
+        return False, f"YAML error: {e}"
+    except Exception as e:
+        return False, str(e)
+
+
 # ── Singletons (survive Streamlit reruns) ─────────────────────────────────────
 
 def _open_tunnel(ssh_host, ssh_port, ssh_user, ssh_key_path, local_port, remote_port):
@@ -343,7 +368,11 @@ def render_queue(qbit: QBittorrentClient):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    cfg = load_config(_config_path())
+    # Initialise active config from CLI arg on first load; persists across reruns
+    if "config_path" not in st.session_state:
+        st.session_state["config_path"] = _config_path()
+
+    cfg = load_config(st.session_state["config_path"])
     qbit_cfg = cfg["qbittorrent"]
     ssh_cfg = cfg["ssh"]
 
@@ -399,6 +428,35 @@ def main():
 
         st.divider()
         st.caption(f"Updated {time.strftime('%H:%M:%S')}")
+
+        # Config switcher — shown only when both profiles exist on disk
+        available = [p for p in CONFIG_PROFILES if Path(p).exists()]
+        current_path = st.session_state["config_path"]
+        icon, label = CONFIG_PROFILES.get(current_path, ("⚙️", current_path))
+        st.caption(f"Config: {icon} **{label}**")
+        if len(available) > 1:
+            sw_cols = st.columns(len(available))
+            for col, path in zip(sw_cols, available):
+                icon, label = CONFIG_PROFILES[path]
+                is_active = path == current_path
+                if col.button(
+                    f"{icon} {label}",
+                    key=f"cfg_{path}",
+                    type="primary" if is_active else "secondary",
+                    use_container_width=True,
+                    disabled=is_active,
+                    help=path,
+                ):
+                    ok, err = _validate_config(path)
+                    if ok:
+                        st.session_state["config_path"] = path
+                        get_tunnel.clear()
+                        get_qbit.clear()
+                        get_vpn.clear()
+                        st.rerun()
+                    else:
+                        st.warning(f"Cannot switch to {path}: {err}")
+
         st.button("⟳ Refresh", use_container_width=True)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
