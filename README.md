@@ -131,37 +131,21 @@ Everything else can stay the same as the home config.
 
 ## Usage
 
-### Sidebar
+The app has three tabs — **Add Torrent**, **Queue**, and **Files** — plus a persistent
+sidebar for VPN and transfer status. A **❓ Help** button in the sidebar opens the full
+UI reference inside the app.
 
-| Element | Description |
+For a complete UI walkthrough see [USAGE.md](USAGE.md).
+
+### Quick reference
+
+| Tab / Area | Purpose |
 |---|---|
-| VPN status | Shows NordVPN connection state, server hostname, city/country, and IP. |
-| Connect / Disconnect | Controls NordVPN on the server via SSH. |
-| Rotate Server | Switches to a different P2P server in the same country (or one you type). Takes ~15–30 s; status updates automatically when done. |
-| Transfer | Live global download/upload speed. Auto-refreshes every 5 seconds. Shows a Restart button if qBittorrent is unreachable. |
-| Save to | Pick a category (movies / tv / other) — sets the download path on the server. |
-| Stop seeding when complete | Toggle — when on, new torrents stop automatically once downloaded (ratio 0). Per-torrent resume is available in the Queue tab. |
-| Refresh | Manually force a full page refresh. |
-
-### Add Torrent tab
-
-- **Upload .torrent file** — drag one or more `.torrent` files from Finder, then click Add.
-- **Paste magnet link** — paste one or more magnet links (one per line), then click Add.
-
-After a successful add, Emby is notified to scan the library immediately (if
-`emby.api_key` is configured).
-
-### Queue tab
-
-Auto-refreshes every 5 seconds. Shows all torrents with a circular progress indicator,
-name, size, ETA, and per-torrent speeds. Filter by status: All / Downloading / Seeding /
-Stopped. Each row has:
-
-| Button | Action |
-|---|---|
-| ▶ / ⏸ | Resume or pause the torrent |
-| ▶ Seed | Resume seeding for a torrent that was auto-stopped on completion |
-| 🗑 | Remove from queue (keeps files on disk) |
+| Sidebar — VPN | NordVPN status, connect/disconnect, rotate to a new server |
+| Sidebar — Transfer | Live global speeds; Restart button if qBittorrent is unreachable |
+| **Add Torrent** | Upload `.torrent` files or paste magnet links; choose destination folder and seeding behaviour |
+| **Queue** | Live torrent list with filters, per-torrent speeds, pause/resume/delete; auto-refreshes every 5 s |
+| **Files** | Per-file priority manager for multi-file torrents — smart auto-assign or manual per-file control |
 
 ---
 

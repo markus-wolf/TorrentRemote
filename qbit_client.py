@@ -136,6 +136,22 @@ class QBittorrentClient:
         except Exception:
             return False
 
+    def get_torrent_files(self, torrent_hash: str) -> list:
+        try:
+            return self._get("/torrents/files", params={"hash": torrent_hash}).json()
+        except Exception:
+            return []
+
+    def set_file_priority(self, torrent_hash: str, ids: list, priority: int) -> bool:
+        try:
+            r = self._post(
+                "/torrents/filePrio",
+                data={"hash": torrent_hash, "id": "|".join(map(str, ids)), "priority": priority},
+            )
+            return r.status_code == 200
+        except Exception:
+            return False
+
     def reachable(self) -> bool:
         try:
             self._get("/app/version")

@@ -1,4 +1,5 @@
 import argparse
+import re
 import socket
 import subprocess
 import sys
@@ -11,6 +12,64 @@ import yaml
 
 from qbit_client import QBittorrentClient
 from vpn import VPNManager
+
+# ── File priority constants ───────────────────────────────────────────────────
+PRIO_SKIP    = 0
+PRIO_NORMAL  = 1
+PRIO_HIGH    = 6
+PRIO_MAXIMUM = 7
+
+PRIORITY_LABEL = {PRIO_SKIP: "Skip", PRIO_NORMAL: "Normal", PRIO_HIGH: "High", PRIO_MAXIMUM: "Maximum"}
+PRIORITY_BADGE_HTML = {
+    PRIO_SKIP:    '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#555;color:#ccc">Skip</span>',
+    PRIO_NORMAL:  '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#1a6aab;color:#fff">Normal</span>',
+    PRIO_HIGH:    '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#d07000;color:#fff">High</span>',
+    PRIO_MAXIMUM: '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#b01020;color:#fff">Maximum</span>',
+}
+
+
+def natural_key(s: str):
+    """Sort key that handles embedded integers (S01E02 before S01E10)."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+
+def compute_priority_plan(files: list) -> dict:
+    """
+    Return {file_index: desired_priority} for every non-skipped file.
+    Rule: completed → Normal | 1st incomplete → Maximum | 2nd → High | rest → Normal.
+    Files with priority==0 (Skip) are left untouched.
+    """
+    active = [(i, f) for i, f in enumerate(files) if f["priority"] != PRIO_SKIP]
+    active.sort(key=lambda x: natural_key(x[1]["name"]))
+    plan: dict = {}
+    incomplete_seen = 0
+    for idx, f in active:
+        if f["progress"] >= 1.0:
+            plan[idx] = PRIO_NORMAL
+        else:
+            if incomplete_seen == 0:
+                plan[idx] = PRIO_MAXIMUM
+            elif incomplete_seen == 1:
+                plan[idx] = PRIO_HIGH
+            else:
+                plan[idx] = PRIO_NORMAL
+            incomplete_seen += 1
+    return plan
+
+
+def apply_priority_plan(qbit: QBittorrentClient, hash_: str,
+                        files: list, plan: dict) -> list:
+    """Apply plan, return list of (name, old_priority, new_priority) changes."""
+    buckets: dict = {}
+    changes = []
+    for idx, desired in plan.items():
+        current = files[idx]["priority"]
+        if current != desired:
+            buckets.setdefault(desired, []).append(idx)
+            changes.append((files[idx]["name"], current, desired))
+    for priority, ids in buckets.items():
+        qbit.set_file_priority(hash_, ids, priority)
+    return changes
 
 st.set_page_config(page_title="TorrentRemote", page_icon="🧲", layout="wide")
 
@@ -470,11 +529,23 @@ def main():
                     else:
                         st.warning(f"Cannot switch to {path}: {err}")
 
-        st.button("⟳ Refresh", use_container_width=True)
+        r_col, h_col = st.columns(2)
+        r_col.button("⟳ Refresh", use_container_width=True)
+        if h_col.button("❓ Help", use_container_width=True):
+            st.session_state["show_help"] = not st.session_state.get("show_help", False)
+
+    # ── Help page ─────────────────────────────────────────────────────────────
+    if st.session_state.get("show_help"):
+        st.button("← Back", on_click=lambda: st.session_state.update(show_help=False))
+        try:
+            st.markdown(Path("USAGE.md").read_text())
+        except FileNotFoundError:
+            st.error("USAGE.md not found.")
+        return
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
 
-    tab_add, tab_queue = st.tabs(["Add Torrent", "Queue"])
+    tab_add, tab_queue, tab_files = st.tabs(["Add Torrent", "Queue", "Files"])
 
     # Add Torrent
     with tab_add:
@@ -548,6 +619,158 @@ def main():
     # Queue
     with tab_queue:
         render_queue(qbit)
+
+    # Files — per-torrent file priority manager
+    with tab_files:
+        all_torrents = qbit.get_torrents()
+
+        # Prefer downloading torrents; fall back to all
+        downloading = [t for t in all_torrents
+                       if t.get("state") in {"downloading", "stalledDL", "checkingDL",
+                                              "queuedDL", "moving", "pausedDL"}]
+        candidates = downloading if downloading else all_torrents
+
+        if not candidates:
+            st.info("No torrents found.")
+        else:
+            torrent_opts = sorted(candidates, key=lambda t: t["name"])
+            hashes = [t["hash"] for t in torrent_opts]
+            labels = {
+                t["hash"]: f"{t['name']}  ({t['progress']*100:.1f}%  ·  {STATE_LABELS.get(t['state'], t['state'])})"
+                for t in torrent_opts
+            }
+
+            # Persist selection across reruns
+            if st.session_state.get("_files_hash") not in hashes:
+                st.session_state["_files_hash"] = hashes[0]
+
+            selected_hash = st.selectbox(
+                "Torrent",
+                options=hashes,
+                format_func=lambda h: labels[h],
+                key="_files_hash",
+            )
+
+            sel = next(t for t in torrent_opts if t["hash"] == selected_hash)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("⬇ Download", fmt_speed(sel.get("dlspeed", 0)))
+            m2.metric("⬆ Upload",   fmt_speed(sel.get("upspeed", 0)))
+            m3.metric("Progress",   f"{sel['progress']*100:.1f}%")
+            m4.metric("ETA",        fmt_eta(sel.get("eta", -1)))
+
+            # Action buttons
+            btn_col, _, _ = st.columns([2, 2, 6])
+            apply_btn = btn_col.button("⚡ Apply Smart Priorities", type="primary",
+                                       use_container_width=True,
+                                       help="Maximum → 1st incomplete  |  High → 2nd  |  Normal → rest")
+
+            # Fetch files
+            files = qbit.get_torrent_files(selected_hash)
+
+            if not files:
+                st.warning("No file data returned — torrent may still be loading metadata.")
+            else:
+                plan = compute_priority_plan(files)
+
+                if apply_btn:
+                    changes = apply_priority_plan(qbit, selected_hash, files, plan)
+                    if changes:
+                        files = qbit.get_torrent_files(selected_hash)
+                        plan  = compute_priority_plan(files)
+                        st.success(f"Updated {len(changes)} file(s)")
+                        for name, old, new in changes:
+                            short = name.split("/")[-1]
+                            st.write(f"- `{short}` &nbsp; "
+                                     f"{PRIORITY_BADGE_HTML[old]} → {PRIORITY_BADGE_HTML[new]}",
+                                     unsafe_allow_html=True)
+                    else:
+                        st.info("Priorities already optimal — nothing to change.")
+
+                # ── File table ────────────────────────────────────────────────
+                active_files  = [(i, f) for i, f in enumerate(files) if f["priority"] != PRIO_SKIP]
+                skipped_files = [(i, f) for i, f in enumerate(files) if f["priority"] == PRIO_SKIP]
+                active_files.sort(key=lambda x: natural_key(x[1]["name"]))
+
+                ROW_BG = ["rgba(128,128,128,0.04)", "rgba(128,128,128,0.11)"]
+
+                if not active_files:
+                    st.warning("All files are marked Skip.")
+                else:
+                    rows = []
+                    for row_i, (idx, f) in enumerate(active_files):
+                        desired  = plan.get(idx, f["priority"])
+                        current  = f["priority"]
+                        pct      = f["progress"] * 100
+                        name     = f["name"].split("/")[-1]
+                        bg       = ROW_BG[row_i % 2]
+
+                        if f["progress"] >= 1.0:
+                            prog_cell = "✅ 100%"
+                        else:
+                            prog_cell = (
+                                f'<div style="background:rgba(128,128,128,0.25);border-radius:4px;height:8px;margin-bottom:2px">'
+                                f'<div style="background:#1a6aab;border-radius:4px;height:8px;width:{pct:.1f}%"></div></div>'
+                                f'<span style="font-size:0.8em">{pct:.1f}%</span>'
+                            )
+
+                        if current != desired:
+                            prio_cell = f'{PRIORITY_BADGE_HTML[current]} → {PRIORITY_BADGE_HTML[desired]}'
+                        else:
+                            prio_cell = PRIORITY_BADGE_HTML[current]
+
+                        rows.append(
+                            f'<tr style="background:{bg}">'
+                            f'<td style="padding:6px 10px;word-break:break-all">{name}</td>'
+                            f'<td style="padding:6px 10px;white-space:nowrap">{fmt_size(f["size"])}</td>'
+                            f'<td style="padding:6px 10px;min-width:140px">{prog_cell}</td>'
+                            f'<td style="padding:6px 10px;white-space:nowrap">{prio_cell}</td>'
+                            f'</tr>'
+                        )
+
+                    st.markdown(
+                        '<table style="width:100%;border-collapse:collapse">'
+                        '<thead><tr style="border-bottom:1px solid rgba(128,128,128,0.3)">'
+                        '<th style="padding:6px 10px;text-align:left">File</th>'
+                        '<th style="padding:6px 10px;text-align:left">Size</th>'
+                        '<th style="padding:6px 10px;text-align:left">Progress</th>'
+                        '<th style="padding:6px 10px;text-align:left">Priority</th>'
+                        '</tr></thead><tbody>'
+                        + "".join(rows) +
+                        '</tbody></table>',
+                        unsafe_allow_html=True,
+                    )
+
+                    # Manual per-file priority overrides
+                    st.divider()
+                    st.caption("Manual priority overrides")
+                    prio_options = [PRIO_MAXIMUM, PRIO_HIGH, PRIO_NORMAL, PRIO_SKIP]
+                    for idx, f in active_files:
+                        name  = f["name"].split("/")[-1]
+                        fcols = st.columns([6, 2])
+                        fcols[0].markdown(f"<small>{name}</small>", unsafe_allow_html=True)
+                        new_p = fcols[1].selectbox(
+                            "Priority",
+                            options=prio_options,
+                            index=prio_options.index(f["priority"]) if f["priority"] in prio_options else 2,
+                            format_func=lambda p: PRIORITY_LABEL[p],
+                            key=f"prio_{selected_hash}_{idx}",
+                            label_visibility="collapsed",
+                        )
+                        if new_p != f["priority"]:
+                            qbit.set_file_priority(selected_hash, [idx], new_p)
+                            st.rerun()
+
+                if skipped_files:
+                    with st.expander(f"Skipped files ({len(skipped_files)})"):
+                        for _, f in sorted(skipped_files, key=lambda x: natural_key(x[1]["name"])):
+                            st.write(f"⬜ {f['name'].split('/')[-1]}")
+
+                incomplete = sum(1 for _, f in active_files if f["progress"] < 1.0)
+                complete   = len(active_files) - incomplete
+                st.caption(
+                    f"{complete} complete  ·  {incomplete} remaining  ·  "
+                    f"{len(skipped_files)} skipped  ·  updated {time.strftime('%H:%M:%S')}"
+                )
 
 
 if __name__ == "__main__":
