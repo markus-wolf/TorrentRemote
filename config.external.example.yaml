@@ -16,6 +16,8 @@ emby:
   host: "your-server-hostname-or-ip"
   port: 8096
   api_key: ""                  # Emby Dashboard → Advanced → API Keys (leave blank to disable)
+  use_ssh_tunnel: true         # tunnel Emby through SSH — no router port needed
+  ssh_tunnel_local_port: 18096 # local port on your Mac
 
 downloads:
   movies: "/downloads/movies"

@@ -187,10 +187,11 @@ STATE_LABELS = {
 }
 
 FILTER_GROUPS = {
-    "All":         None,
-    "Downloading": {"downloading", "stalledDL", "checkingDL", "queuedDL", "moving"},
-    "Seeding":     {"uploading", "stalledUP", "checkingUP", "queuedUP"},
-    "Stopped":     {"pausedDL", "pausedUP", "error", "missingFiles", "unknown"},
+    "All":          None,
+    "Incomplete":   "incomplete",   # progress < 100 % (special sentinel)
+    "Downloading":  {"downloading", "stalledDL", "checkingDL", "queuedDL", "moving"},
+    "Seeding":      {"uploading", "stalledUP", "checkingUP", "queuedUP"},
+    "Stopped":      {"pausedDL", "pausedUP", "error", "missingFiles", "unknown"},
 }
 
 
@@ -309,7 +310,12 @@ def render_queue(qbit: QBittorrentClient):
     )
 
     states = FILTER_GROUPS[status_filter]
-    torrents = [t for t in all_torrents if states is None or t.get("state") in states]
+    if states is None:
+        torrents = all_torrents
+    elif states == "incomplete":
+        torrents = [t for t in all_torrents if t.get("progress", 1.0) < 1.0]
+    else:
+        torrents = [t for t in all_torrents if t.get("state") in states]
 
     if not torrents:
         st.caption(f"No {status_filter.lower()} torrents.")
@@ -398,10 +404,32 @@ def main():
     qbit = get_qbit(qbit_host, qbit_port, qbit_cfg["username"], qbit_cfg["password"])
     vpn = get_vpn(ssh_cfg["host"], ssh_cfg["port"], ssh_cfg["user"], ssh_cfg["key_path"])
 
+    # Emby SSH tunnel (optional)
+    emby_cfg = cfg.get("emby", {})
+    emby_url = None
+    if emby_cfg.get("use_ssh_tunnel"):
+        emby_local = emby_cfg.get("ssh_tunnel_local_port", 18096)
+        emby_remote = emby_cfg.get("port", 8096)
+        try:
+            ensure_tunnel(
+                ssh_cfg["host"], ssh_cfg["port"],
+                ssh_cfg["user"], ssh_cfg["key_path"],
+                emby_local, emby_remote,
+            )
+            emby_url = f"http://localhost:{emby_local}"
+        except Exception as e:
+            st.warning(f"Emby tunnel failed: {e}")
+
     # ── Sidebar ───────────────────────────────────────────────────────────────
 
     with st.sidebar:
         st.title("🧲 TorrentRemote")
+
+        if emby_url:
+            st.link_button("📺 Open Emby", emby_url, use_container_width=True)
+        elif emby_cfg.get("host") and not emby_cfg.get("use_ssh_tunnel"):
+            direct = f"http://{emby_cfg['host']}:{emby_cfg.get('port', 8096)}"
+            st.link_button("📺 Open Emby", direct, use_container_width=True)
 
         # VPN status (auto-refreshing fragment)
         render_vpn(vpn)
@@ -410,21 +438,6 @@ def main():
 
         # Transfer speeds (auto-refreshing fragment)
         render_transfer(qbit, vpn)
-
-        st.divider()
-
-        # Save-path picker
-        st.subheader("Save to")
-        dl_paths: dict = cfg.get("downloads", {})
-        category = st.selectbox("Category", list(dl_paths.keys()))
-        save_path = dl_paths[category]
-        st.caption(save_path)
-
-        st.divider()
-
-        # Seeding behaviour
-        st.subheader("Options")
-        stop_seeding = st.toggle("Stop seeding when complete", value=True)
 
         st.divider()
         st.caption(f"Updated {time.strftime('%H:%M:%S')}")
@@ -465,6 +478,23 @@ def main():
 
     # Add Torrent
     with tab_add:
+        # ── Destination & options ──────────────────────────────────────────────
+        dl_paths: dict = cfg.get("downloads", {})
+        opt_cols = st.columns([3, 1])
+        category = opt_cols[0].selectbox(
+            "Save to",
+            list(dl_paths.keys()),
+            format_func=lambda k: f"📁 {k}",
+        )
+        save_path = dl_paths[category]
+        opt_cols[0].caption(save_path)
+        stop_seeding = opt_cols[1].toggle(
+            "Stop seeding when complete", value=True,
+            help="Automatically stop seeding once the download finishes",
+        )
+
+        st.divider()
+
         col_file, col_mag = st.columns(2, gap="large")
 
         with col_file:
