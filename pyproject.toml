@@ -1,0 +1,18 @@
+[project]
+name = "torrent-remote"
+version = "0.1.0"
+description = "Streamlit remote control for a VPN-bound qBittorrent server over SSH"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "streamlit>=1.37.0",
+    "requests>=2.31.0",
+    "paramiko>=3.4.0",
+    "pyyaml>=6.0.0",
+]
+
+[dependency-groups]
+dev = []
+
+[tool.uv]
+package = false

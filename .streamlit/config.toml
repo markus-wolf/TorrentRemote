@@ -1,0 +1,13 @@
+# Streamlit theme — configure appearance here rather than injecting CSS.
+#
+# Defining BOTH [theme.light] and [theme.dark] keeps the app following the
+# system/OS light-dark preference (and shows the in-app mode switcher). A bare
+# [theme] block would instead lock the app to a single mode (default: light).
+#
+# Only primaryColor is set — the accent used by primary buttons and the queue
+# filter. Everything else falls back to Streamlit's built-in light/dark bases.
+[theme.light]
+primaryColor = "#1a6aab"   # blue accent, matches the priority badges / progress bars
+
+[theme.dark]
+primaryColor = "#3b82f6"   # brighter blue for contrast on dark backgrounds

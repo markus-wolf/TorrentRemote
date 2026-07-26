@@ -6,6 +6,7 @@ import sys
 import time
 from pathlib import Path
 
+import pandas as pd
 import requests
 import streamlit as st
 import yaml
@@ -20,11 +21,12 @@ PRIO_HIGH    = 6
 PRIO_MAXIMUM = 7
 
 PRIORITY_LABEL = {PRIO_SKIP: "Skip", PRIO_NORMAL: "Normal", PRIO_HIGH: "High", PRIO_MAXIMUM: "Maximum"}
-PRIORITY_BADGE_HTML = {
-    PRIO_SKIP:    '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#555;color:#ccc">Skip</span>',
-    PRIO_NORMAL:  '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#1a6aab;color:#fff">Normal</span>',
-    PRIO_HIGH:    '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#d07000;color:#fff">High</span>',
-    PRIO_MAXIMUM: '<span style="padding:2px 8px;border-radius:10px;font-size:0.8em;background:#b01020;color:#fff">Maximum</span>',
+# Native color-badge markdown directives (replace hand-rolled HTML spans)
+PRIORITY_BADGE_MD = {
+    PRIO_SKIP:    ":gray-badge[Skip]",
+    PRIO_NORMAL:  ":blue-badge[Normal]",
+    PRIO_HIGH:    ":orange-badge[High]",
+    PRIO_MAXIMUM: ":red-badge[Maximum]",
 }
 
 
@@ -91,8 +93,8 @@ def load_config(path: str) -> dict:
 
 
 CONFIG_PROFILES = {
-    "config.yaml":          ("🏠", "Home"),
-    "config.external.yaml": ("🌐", "External"),
+    "config.yaml":          (":material/home:", "Home"),
+    "config.external.yaml": (":material/public:", "External"),
 }
 
 
@@ -293,7 +295,7 @@ def render_vpn(vpn: VPNManager):
             placeholder="e.g. Netherlands (blank = current)",
             label_visibility="collapsed",
         )
-        if st.button("🔄 Rotate Server", use_container_width=True,
+        if st.button("Rotate server", icon=":material/sync:", width="stretch",
                      help="Pick a different server in the same (or specified) country"):
             ok, msg = vpn.rotate(country=rotate_country)
             if ok:
@@ -302,7 +304,7 @@ def render_vpn(vpn: VPNManager):
                 st.error(msg)
             # fragment will auto-refresh every 10s; force one immediate cycle
             st.rerun(scope="fragment")
-        if st.button("Disconnect VPN", use_container_width=True):
+        if st.button("Disconnect VPN", width="stretch"):
             with st.spinner("Disconnecting…"):
                 ok, msg = vpn.disconnect()
             st.toast(msg)
@@ -311,7 +313,7 @@ def render_vpn(vpn: VPNManager):
         st.error("Disconnected")
         if vs.get("error"):
             st.caption(vs["error"])
-        if st.button("Connect VPN (P2P)", type="primary", use_container_width=True):
+        if st.button("Connect VPN (P2P)", type="primary", width="stretch"):
             with st.spinner("Connecting…"):
                 ok, msg = vpn.connect("P2P")
             if ok:
@@ -333,7 +335,7 @@ def render_transfer(qbit: QBittorrentClient, vpn: VPNManager):
         c2.metric("↑", fmt_speed(info.get("up_info_speed", 0)))
     else:
         st.caption("qBittorrent unreachable")
-        if st.button("Restart qBittorrent", use_container_width=True):
+        if st.button("Restart qBittorrent", width="stretch"):
             with st.spinner("Restarting…"):
                 ok, msg = vpn.restart_qbittorrent()
             st.toast(msg)
@@ -361,12 +363,15 @@ def render_queue(qbit: QBittorrentClient):
     c4.metric("Total ↑", fmt_speed(total_ul))
 
     # Filter
-    status_filter = st.radio(
+    filter_keys = list(FILTER_GROUPS.keys())
+    status_filter = st.segmented_control(
         "Show",
-        list(FILTER_GROUPS.keys()),
-        horizontal=True,
+        filter_keys,
+        default=filter_keys[0],
         label_visibility="collapsed",
     )
+    if status_filter is None:  # segmented_control allows deselection; fall back to "All"
+        status_filter = filter_keys[0]
 
     states = FILTER_GROUPS[status_filter]
     if states is None:
@@ -411,19 +416,19 @@ def render_queue(qbit: QBittorrentClient):
         with col_act:
             btns = st.columns(3)
             if is_paused and not is_stopped_seeding:
-                if btns[0].button("▶", key=f"r_{h}", help="Resume"):
+                if btns[0].button(":material/play_arrow:", key=f"r_{h}", help="Resume"):
                     qbit.resume_torrent(h)
                     st.rerun()
             elif not is_stopped_seeding:
-                if btns[0].button("⏸", key=f"p_{h}", help="Pause"):
+                if btns[0].button(":material/pause:", key=f"p_{h}", help="Pause"):
                     qbit.pause_torrent(h)
                     st.rerun()
             if is_stopped_seeding:
-                if btns[1].button("▶ Seed", key=f"s_{h}", help="Resume seeding"):
+                if btns[1].button("Seed", icon=":material/play_arrow:", key=f"s_{h}", help="Resume seeding"):
                     qbit.set_share_limits(h, ratio_limit=-1, seeding_time_limit=-1)
                     qbit.resume_torrent(h)
                     st.rerun()
-            if btns[2].button("🗑", key=f"d_{h}", help="Remove (keep files)"):
+            if btns[2].button(":material/delete:", key=f"d_{h}", help="Remove (keep files)"):
                 qbit.delete_torrent(h, delete_files=False)
                 st.rerun()
 
@@ -485,10 +490,10 @@ def main():
         st.title("🧲 TorrentRemote")
 
         if emby_url:
-            st.link_button("📺 Open Emby", emby_url, use_container_width=True)
+            st.link_button("Open Emby", emby_url, icon=":material/tv:", width="stretch")
         elif emby_cfg.get("host") and not emby_cfg.get("use_ssh_tunnel"):
             direct = f"http://{emby_cfg['host']}:{emby_cfg.get('port', 8096)}"
-            st.link_button("📺 Open Emby", direct, use_container_width=True)
+            st.link_button("Open Emby", direct, icon=":material/tv:", width="stretch")
 
         # VPN status (auto-refreshing fragment)
         render_vpn(vpn)
@@ -504,7 +509,7 @@ def main():
         # Config switcher — shown only when both profiles exist on disk
         available = [p for p in CONFIG_PROFILES if Path(p).exists()]
         current_path = st.session_state["config_path"]
-        icon, label = CONFIG_PROFILES.get(current_path, ("⚙️", current_path))
+        icon, label = CONFIG_PROFILES.get(current_path, (":material/settings:", current_path))
         st.caption(f"Config: {icon} **{label}**")
         if len(available) > 1:
             sw_cols = st.columns(len(available))
@@ -515,7 +520,7 @@ def main():
                     f"{icon} {label}",
                     key=f"cfg_{path}",
                     type="primary" if is_active else "secondary",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=is_active,
                     help=path,
                 ):
@@ -530,8 +535,8 @@ def main():
                         st.warning(f"Cannot switch to {path}: {err}")
 
         r_col, h_col = st.columns(2)
-        r_col.button("⟳ Refresh", use_container_width=True)
-        if h_col.button("❓ Help", use_container_width=True):
+        r_col.button("Refresh", icon=":material/refresh:", width="stretch")
+        if h_col.button("Help", icon=":material/help:", width="stretch"):
             st.session_state["show_help"] = not st.session_state.get("show_help", False)
 
     # ── Help page ─────────────────────────────────────────────────────────────
@@ -545,9 +550,13 @@ def main():
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
 
-    tab_add, tab_queue, tab_files = st.tabs(["Add Torrent", "Queue", "Files"])
+    # on_change="rerun" so a tab's .open reflects the current selection, letting us
+    # skip the Files tab's synchronous qBittorrent calls when it isn't showing.
+    tab_add, tab_queue, tab_files = st.tabs(
+        ["Add torrent", "Queue", "Files"], on_change="rerun"
+    )
 
-    # Add Torrent
+    # Add torrent
     with tab_add:
         # ── Destination & options ──────────────────────────────────────────────
         dl_paths: dict = cfg.get("downloads", {})
@@ -620,8 +629,13 @@ def main():
     with tab_queue:
         render_queue(qbit)
 
-    # Files — per-torrent file priority manager
+    # Files — per-torrent file priority manager.
+    # This is the last section of main(); return early when the tab isn't showing so
+    # its synchronous qBittorrent calls don't run on every rerun. If more UI is ever
+    # added after this block, convert the guard to an `if tab_files.open:` wrapper.
     with tab_files:
+        if not tab_files.open:
+            return
         all_torrents = qbit.get_torrents()
 
         # Prefer downloading torrents; fall back to all
@@ -660,8 +674,8 @@ def main():
 
             # Action buttons
             btn_col, _, _ = st.columns([2, 2, 6])
-            apply_btn = btn_col.button("⚡ Apply Smart Priorities", type="primary",
-                                       use_container_width=True,
+            apply_btn = btn_col.button("Apply smart priorities", type="primary",
+                                       icon=":material/bolt:", width="stretch",
                                        help="Maximum → 1st incomplete  |  High → 2nd  |  Normal → rest")
 
             # Fetch files
@@ -680,9 +694,8 @@ def main():
                         st.success(f"Updated {len(changes)} file(s)")
                         for name, old, new in changes:
                             short = name.split("/")[-1]
-                            st.write(f"- `{short}` &nbsp; "
-                                     f"{PRIORITY_BADGE_HTML[old]} → {PRIORITY_BADGE_HTML[new]}",
-                                     unsafe_allow_html=True)
+                            st.markdown(f"- `{short}` &nbsp; "
+                                        f"{PRIORITY_BADGE_MD[old]} → {PRIORITY_BADGE_MD[new]}")
                     else:
                         st.info("Priorities already optimal — nothing to change.")
 
@@ -691,53 +704,35 @@ def main():
                 skipped_files = [(i, f) for i, f in enumerate(files) if f["priority"] == PRIO_SKIP]
                 active_files.sort(key=lambda x: natural_key(x[1]["name"]))
 
-                ROW_BG = ["rgba(128,128,128,0.04)", "rgba(128,128,128,0.11)"]
-
                 if not active_files:
                     st.warning("All files are marked Skip.")
                 else:
-                    rows = []
-                    for row_i, (idx, f) in enumerate(active_files):
-                        desired  = plan.get(idx, f["priority"])
-                        current  = f["priority"]
-                        pct      = f["progress"] * 100
-                        name     = f["name"].split("/")[-1]
-                        bg       = ROW_BG[row_i % 2]
-
-                        if f["progress"] >= 1.0:
-                            prog_cell = "✅ 100%"
-                        else:
-                            prog_cell = (
-                                f'<div style="background:rgba(128,128,128,0.25);border-radius:4px;height:8px;margin-bottom:2px">'
-                                f'<div style="background:#1a6aab;border-radius:4px;height:8px;width:{pct:.1f}%"></div></div>'
-                                f'<span style="font-size:0.8em">{pct:.1f}%</span>'
-                            )
-
+                    table_rows = []
+                    for idx, f in active_files:
+                        desired = plan.get(idx, f["priority"])
+                        current = f["priority"]
                         if current != desired:
-                            prio_cell = f'{PRIORITY_BADGE_HTML[current]} → {PRIORITY_BADGE_HTML[desired]}'
+                            prio = f"{PRIORITY_LABEL[current]} → {PRIORITY_LABEL[desired]}"
                         else:
-                            prio_cell = PRIORITY_BADGE_HTML[current]
+                            prio = PRIORITY_LABEL[current]
+                        table_rows.append({
+                            "File": f["name"].split("/")[-1],
+                            "Size": fmt_size(f["size"]),
+                            "Progress": f["progress"],
+                            "Priority": prio,
+                        })
 
-                        rows.append(
-                            f'<tr style="background:{bg}">'
-                            f'<td style="padding:6px 10px;word-break:break-all">{name}</td>'
-                            f'<td style="padding:6px 10px;white-space:nowrap">{fmt_size(f["size"])}</td>'
-                            f'<td style="padding:6px 10px;min-width:140px">{prog_cell}</td>'
-                            f'<td style="padding:6px 10px;white-space:nowrap">{prio_cell}</td>'
-                            f'</tr>'
-                        )
-
-                    st.markdown(
-                        '<table style="width:100%;border-collapse:collapse">'
-                        '<thead><tr style="border-bottom:1px solid rgba(128,128,128,0.3)">'
-                        '<th style="padding:6px 10px;text-align:left">File</th>'
-                        '<th style="padding:6px 10px;text-align:left">Size</th>'
-                        '<th style="padding:6px 10px;text-align:left">Progress</th>'
-                        '<th style="padding:6px 10px;text-align:left">Priority</th>'
-                        '</tr></thead><tbody>'
-                        + "".join(rows) +
-                        '</tbody></table>',
-                        unsafe_allow_html=True,
+                    st.dataframe(
+                        pd.DataFrame(table_rows),
+                        hide_index=True,
+                        column_config={
+                            "File": st.column_config.TextColumn("File", width="large"),
+                            "Size": st.column_config.TextColumn("Size", width="small"),
+                            "Progress": st.column_config.ProgressColumn(
+                                "Progress", min_value=0.0, max_value=1.0, format="percent"
+                            ),
+                            "Priority": st.column_config.TextColumn("Priority", width="small"),
+                        },
                     )
 
                     # Manual per-file priority overrides
@@ -747,7 +742,7 @@ def main():
                     for idx, f in active_files:
                         name  = f["name"].split("/")[-1]
                         fcols = st.columns([6, 2])
-                        fcols[0].markdown(f"<small>{name}</small>", unsafe_allow_html=True)
+                        fcols[0].caption(name)
                         new_p = fcols[1].selectbox(
                             "Priority",
                             options=prio_options,

@@ -328,7 +328,7 @@ ssh:
 Then run the app with the external config:
 
 ```bash
-streamlit run app.py -- --config config.external.yaml
+uv run streamlit run app.py -- --config config.external.yaml
 ```
 
 ### Test from outside

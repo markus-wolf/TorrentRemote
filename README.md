@@ -43,9 +43,14 @@ cd TorrentRemote
 
 **2. Install dependencies:**
 
+This project uses [uv](https://docs.astral.sh/uv/) with Python 3.13.
+
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+
+`uv` creates the `.venv` and installs the exact pinned dependencies from `uv.lock`.
+If Python 3.13 isn't installed, `uv` fetches it automatically.
 
 **3. Create your config file(s):**
 
@@ -67,10 +72,10 @@ See [Configuration](#configuration) below for field details.
 
 ```bash
 # at home
-streamlit run app.py
+uv run streamlit run app.py
 
 # away from home
-streamlit run app.py -- --config config.external.yaml
+uv run streamlit run app.py -- --config config.external.yaml
 ```
 
 The app opens at `http://localhost:8501`. The SSH tunnel to the server is established
@@ -146,6 +151,19 @@ For a complete UI walkthrough see [USAGE.md](USAGE.md).
 | **Add Torrent** | Upload `.torrent` files or paste magnet links; choose destination folder and seeding behaviour |
 | **Queue** | Live torrent list with filters, per-torrent speeds, pause/resume/delete; auto-refreshes every 5 s |
 | **Files** | Per-file priority manager for multi-file torrents — smart auto-assign or manual per-file control |
+
+### Theming
+
+The app's appearance is configured in [`.streamlit/config.toml`](.streamlit/config.toml)
+rather than with injected CSS. Only the `primaryColor` accent is customised (a blue that
+matches the priority badges and progress bars); everything else uses Streamlit's built-in
+palette.
+
+The accent is defined under **both** `[theme.light]` and `[theme.dark]`. This is deliberate:
+defining both modes keeps the app following your operating system's light/dark preference and
+enables the in-app switcher (**⋮ → Settings → Appearance → Light / Dark / Use system setting**).
+A bare `[theme]` block would instead lock the app to a single mode (light by default), so if
+you add more theme keys, keep them inside the per-mode sections.
 
 ---
 

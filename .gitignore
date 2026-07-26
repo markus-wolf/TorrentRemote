@@ -19,9 +19,6 @@ env/
 config.yaml
 config.external.yaml
 
-# Python version managers
-.python-version
-
 # Streamlit
 .streamlit/secrets.toml
 
